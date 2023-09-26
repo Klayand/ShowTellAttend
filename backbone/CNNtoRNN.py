@@ -7,13 +7,18 @@ import torchvision.models as models
 class EncoderCNN(nn.Module):
     def __init__(self, embed_size):
         super(EncoderCNN, self).__init__()
-        self.encoder = models.inception_v3(pretrained=True)
+        self.encoder = models.wide_resnet50_2(pretrained=True)
         self.encoder.fc = nn.Linear(self.encoder.fc.in_features, embed_size)
         self.relu = nn.ReLU()
+        self.times = []
         self.dropout = nn.Dropout(0.5)
 
-    def forward(self, images):
-        features, _ = self.encoder(images)
+    def forward(self, images, test=False):
+        # if test:
+        #     features = self.encoder(images)
+        # else:
+        #     features, _ = self.encoder(images)
+        features = self.encoder(images)
         features = self.relu(features)
         features = self.dropout(features)
 
@@ -58,7 +63,7 @@ class CNNtoRNN(nn.Module):
         result_caption = []
 
         with torch.no_grad():
-            x = self.encoderCNN(image).unsqueeze(0)
+            x = self.encoderCNN(image, test=True).unsqueeze(0)
             states = None
 
             for _ in range(max_length):

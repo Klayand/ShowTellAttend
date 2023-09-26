@@ -3,7 +3,7 @@ from torch import nn
 from typing import Callable
 from torch.nn import functional as F
 from tqdm import tqdm
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import transforms
 from optimizer import default_optimizer, ALRS
 from torch.utils.tensorboard import SummaryWriter
@@ -20,6 +20,7 @@ def default_loss(x, y):
 class Solver:
     def __init__(self,
                  model: nn.Module,
+                 dataset: Dataset,
                  loss_function: Callable or None = None,
                  optimizer: torch.optim.Optimizer or None = None,
                  scheduler=None,
@@ -29,6 +30,7 @@ class Solver:
         self.criterion = loss_function if loss_function is not None else default_loss
         self.optimizer = optimizer if optimizer is not None else default_optimizer(self.model)
         self.scheduler = scheduler if scheduler is not None else ALRS(self.optimizer)
+        self.dataset = dataset
 
         self.device = device
 
@@ -59,21 +61,23 @@ class Solver:
         step = 0
 
         if load_model:
-            step = load_checkpoint(torch.load('checkpoint.ckpt'), self.model, self.optimizer)
+            step = load_checkpoint('checkpoint.ckpt', self.model, self.optimizer)
 
         self.model.train()
         for epoch in range(1, total_epoch + 1):
+            print_examples(self.model, self.device, self.dataset)
 
             train_loss = 0
 
             # train
             pbar = tqdm(train_loader)
-            for idx, (imgs, captions) in enumerate(pbar, 1):
-                imgs, captions = imgs.to(self.device), captions.to(self.device)
-                out = self.model(imgs, captions[:-1])
+            for idx, (x, y) in enumerate(pbar, 1):
+                x, y = x.to(self.device), y.to(self.device)
+
+                out = self.model(x, y[:-1])
 
                 loss = self.criterion(
-                    out.reshape(-1, out.shape[2]), captions.reshape(-1)
+                    out.reshape(-1, out.shape[2]), y.reshape(-1)
                 )
 
                 step += 1
@@ -96,18 +100,21 @@ class Solver:
             print(f'epoch {epoch}, train_loss = {train_loss}')
             print('-' * 100)
 
-        if save_model:
-            checkpoint = {
-                'model': self.model.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'step': step
-            }
-            save_checkpoint(checkpoint)
+            if save_model:
+                checkpoint = {
+                    'model': self.model.state_dict(),
+                    'encoder': self.model.encoderCNN.state_dict(),
+                    'decoder': self.model.decoderRNN.state_dict(),
+                    'optimizer': self.optimizer.state_dict(),
+                    'step': step
+                }
+                save_checkpoint(checkpoint)
 
 
 if __name__ == '__main__':
-    from backbone import CNNtoRNN, FlickrNormModel
+    from backbone import CNNtoRNN
     from data import get_flickr_loader
+    from utils import test, print_examples
 
     transform = transforms.Compose([
         transforms.Resize((356, 356)),
@@ -116,12 +123,13 @@ if __name__ == '__main__':
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
 
-    dataloader, dataset = get_flickr_loader(root_dir=CFG.ROOT_DIR, annotation_file=CFG.ANNOTATION_DIR, transform=transform, num_workers=16)
+    dataloader, dataset = get_flickr_loader(root_dir=CFG.ROOT_DIR, annotation_file=CFG.ANNOTATION_DIR, transform=transform, num_workers=0)
 
     CFG.VOCAB_SIZE = len(dataset.vocab)
 
     a = CNNtoRNN(CFG)
 
-    solver = Solver(model=a)
+    solver = Solver(model=a, dataset=dataset)
     solver.train(train_loader=dataloader, total_epoch=500)
 
+    test(a, dataset, 'flickr8k/images/109202756_b97fcdc62c.jpg', 'cuda', 'checkpoint.ckpt')
